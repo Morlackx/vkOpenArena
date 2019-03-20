@@ -22,11 +22,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 // tr_map.c
 
 #include "tr_local.h"
-#include "tr_globals.h"
 #include "vk_image.h"
-#include "tr_cvar.h"
-#include "../renderercommon/ref_import.h"
-
 /*
 
 Loads and prepares a map file for scene rendering.
@@ -100,16 +96,15 @@ R_ColorShiftLightingBytes
 ===============
 */
 static	void R_ColorShiftLightingBytes( byte in[4], byte out[4] ) {
-	int	r, g, b;
+	int		shift, r, g, b;
 
 	// shift the color data based on overbright range
-	int shift = 2;
-        //r_mapOverBrightBits->integer;
+	shift = r_mapOverBrightBits->integer - tr.overbrightBits;
 
 	// shift the data based on overbright range
-	r = in[0] * shift;
-	g = in[1] * shift;
-	b = in[2] * shift;
+	r = in[0] << shift;
+	g = in[1] << shift;
+	b = in[2] << shift;
 	
 	// normalize by color instead of saturating to white
 	if ( ( r | g | b ) > 255 ) {
@@ -148,6 +143,9 @@ static	void R_LoadLightmaps( lump_t *l ) {
 		return;
 	}
 	buf = fileBase + l->fileofs;
+
+	// we are about to upload textures
+	R_SyncRenderThread();
 
 	// create all the lightmaps
 	tr.numLightmaps = len / (LIGHTMAP_SIZE * LIGHTMAP_SIZE * 3);
@@ -202,7 +200,7 @@ static	void R_LoadLightmaps( lump_t *l ) {
 			}
 		}
 		tr.lightmaps[i] = R_CreateImage( va("*lightmap%d",i), image, 
-			LIGHTMAP_SIZE, LIGHTMAP_SIZE, qfalse, qfalse, GL_CLAMP, VK_FALSE);
+			LIGHTMAP_SIZE, LIGHTMAP_SIZE, qfalse, qfalse, GL_CLAMP );
 	}
 
 	if ( r_lightmap->integer == 2 )	{
@@ -1337,25 +1335,16 @@ static	void R_LoadSubmodels( lump_t *l )
 
 	s_worldData.bmodels = out = (bmodel_t*) ri.Hunk_Alloc( count * sizeof(*out), h_low );
 
-	for ( i=0 ; i<count ; i++, in++, out++ )
-    {
-		// model_t *model = R_AllocModel();
+	for ( i=0 ; i<count ; i++, in++, out++ ) {
+		model_t *model;
 
-        model_t* model = ri.Hunk_Alloc( sizeof( model_t ), h_low );
-        assert( model != NULL );			// this should never happen
+		model = R_AllocModel();
 
-        model->index = tr.numModels;
-        model->type = MOD_BRUSH;
+		assert( model != NULL );			// this should never happen
+
+		model->type = MOD_BRUSH;
 		model->bmodel = out;
-		snprintf( model->name, sizeof( model->name ), "*%d", i );
-
-        tr.models[tr.numModels] = model;
-
-        if ( ++tr.numModels == MAX_MOD_KNOWN )
-        {
-            ri.Printf(PRINT_WARNING, "R_AllocModel: MAX_MOD_KNOWN.\n");
-	    }
-        ri.Printf( PRINT_ALL, "Allocate Memory for %s model. \n", model->name);
+		Com_sprintf( model->name, sizeof( model->name ), "*%d", i );
 
 		for (j=0 ; j<3 ; j++) {
 			out->bounds[0][j] = LittleFloat (in->mins[j]);
@@ -1563,6 +1552,21 @@ R_LoadFogs
 
 =================
 */
+
+
+static unsigned ColorBytes4 (float r, float g, float b, float a) {
+	unsigned	i;
+
+	( (byte *)&i )[0] = r * 255;
+	( (byte *)&i )[1] = g * 255;
+	( (byte *)&i )[2] = b * 255;
+	( (byte *)&i )[3] = a * 255;
+
+	return i;
+}
+
+
+
 static	void R_LoadFogs( lump_t *l, lump_t *brushesLump, lump_t *sidesLump ) {
 	int			i;
 	fog_t		*out;
@@ -1647,10 +1651,9 @@ static	void R_LoadFogs( lump_t *l, lump_t *brushesLump, lump_t *sidesLump ) {
 
 		out->parms = shader->fogParms;
 
-        out->colorRGBA[0] = shader->fogParms.color[0] * tr.identityLight * 255;
-        out->colorRGBA[1] = shader->fogParms.color[1] * tr.identityLight * 255;
-        out->colorRGBA[2] = shader->fogParms.color[2] * tr.identityLight * 255;
-        out->colorRGBA[3] = 255;
+		out->colorInt = ColorBytes4 ( shader->fogParms.color[0] * tr.identityLight, 
+			                          shader->fogParms.color[1] * tr.identityLight, 
+			                          shader->fogParms.color[2] * tr.identityLight, 1.0 );
 
 		d = shader->fogParms.depthForOpaque < 1 ? 1 : shader->fogParms.depthForOpaque;
 		out->tcScale = 1.0f / ( d * 8 );
@@ -1673,6 +1676,12 @@ static	void R_LoadFogs( lump_t *l, lump_t *brushesLump, lump_t *sidesLump ) {
 }
 
 
+/*
+================
+R_LoadLightGrid
+
+================
+*/
 void R_LoadLightGrid( lump_t *l )
 {
     ri.Printf (PRINT_ALL, "\n---R_LoadLightGrid---\n");
@@ -1770,7 +1779,7 @@ void R_LoadEntities( lump_t *l )
 
 		// check for remapping of shaders for vertex lighting
 		s = "vertexremapshader";
-		if (!Q_strncmp(keyname, s, strlen(s)) ) {
+		if (!Q_strncmp(keyname, s, (int)strlen(s)) ) {
 			s = strchr(value, ';');
 			if (!s) {
 				ri.Printf( PRINT_WARNING, "WARNING: no semi colon in vertexshaderremap '%s'\n", value );
@@ -1847,7 +1856,7 @@ void RE_LoadWorldMap( const char *name )
 
 	VectorNormalize( tr.sunDirection );
 
-
+	tr.worldMapLoaded = qtrue;
 
 	// load it
     ri.R_ReadFile( name, &buffer );
@@ -1894,10 +1903,11 @@ void RE_LoadWorldMap( const char *name )
 	R_LoadEntities( &header->lumps[LUMP_ENTITIES] );
 	R_LoadLightGrid( &header->lumps[LUMP_LIGHTGRID] );
 
-	s_worldData.dataSize = (unsigned char *)ri.Hunk_Alloc(0, h_low) - startMarker;
+	s_worldData.dataSize = (byte *)ri.Hunk_Alloc(0, h_low) - startMarker;
 
 	// only set tr.world now that we know the entire level has loaded properly
 	tr.world = &s_worldData;
-	tr.worldMapLoaded = qtrue;
+
     ri.FS_FreeFile( buffer );
 }
+

@@ -1,5 +1,4 @@
 #include "tr_local.h"
-#include "../renderercommon/ref_import.h"
 
 static void* q3_stbi_malloc(size_t size) {
     return ri.Malloc((int)size);
@@ -27,30 +26,37 @@ static void* q3_stbi_realloc(void* p, size_t old_size, size_t new_size) {
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 
+#define TJE_IMPLEMENTATION
+#include "tiny_jpeg.h"
 
 
-static void LoadTGA( const char* name, unsigned char** pic, uint32_t* width, uint32_t* height);
-static void LoadBMP( const char* name, unsigned char** pic, uint32_t* width, uint32_t* height);
-static void LoadJPG( const char* name, unsigned char** pic, uint32_t* width, uint32_t* height);
-static void LoadPCX32 ( const char* filename, unsigned char** pic, uint32_t* width, uint32_t* height);
+
+static void LoadBMP( const char *name, unsigned char **pic, int *width, int *height );
+static void LoadTGA( const char *name, unsigned char **pic, int *width, int *height );
+static void LoadJPG( const char *name, unsigned char **pic, int *width, int *height );
+static void LoadPCX32 ( const char *filename, unsigned char **pic, int *width, int *height);
 
 
 
 /*
     Loads any of the supported image types into a cannonical 32 bit format.
 */
-void R_LoadImage2(const char *name, unsigned char **pic, uint32_t* width, uint32_t* height)
+void R_LoadImage2(const char *name, unsigned char **pic, int *width, int *height)
 {
+
+	*pic = NULL;
+	*width = 0;
+	*height = 0;
 
 	const int len = (int)strlen(name);
 	if (len<5)
     {
-        ri.Printf( PRINT_WARNING, "R_LoadImage2: try to loading %s ? \n", name );
+        ri.Printf( PRINT_WARNING, "try to loading %s ? \n", name );
 		return;
 	}
 
     // point to '.', .jped are assume not exist
-    const char* const pPnt = (char*)name + len - 4;
+    char* pPnt = (char*)name + len - 4;
     
     if(pPnt[0] == '.')
     {   // have a extension
@@ -63,7 +69,7 @@ void R_LoadImage2(const char *name, unsigned char **pic, uint32_t* width, uint32
             {
              // try jpg in place of tga
                 char altname[128] = {0};
-                strncpy( altname, name, 128 );                      
+                strcpy( altname, name );                      
                 char* pt = altname + len - 4;
 
                 pt[1] = 'j';
@@ -116,14 +122,16 @@ void R_LoadImage2(const char *name, unsigned char **pic, uint32_t* width, uint32
             LoadJPG( altname, pic, width, height );
         }
         
-        if( *pic == NULL )
+        if( *pic != NULL )
         {
-            ri.Printf( PRINT_WARNING, "%s not present.\n", name);
+            ri.Printf( PRINT_WARNING, "%s without a extension, using %s instead. \n",
+                    name, altname);
         }
-        // else
-        //    ri.Printf( PRINT_ALL, "%s without a extension, using %s instead. \n", name, altname);
+        else
+            ri.Printf( PRINT_WARNING, "%s not present.\n", name);
 
     }
+
 }
 
 
@@ -142,7 +150,7 @@ typedef struct _TargaHeader {
 
 
 
-static void LoadTGA( const char* name, unsigned char** pic, uint32_t* width, uint32_t* height)
+static void LoadTGA( const char *name, unsigned char **pic, int *width, int *height)
 {
 	int	columns, rows, numPixels;
 	unsigned char* pixbuf;
@@ -381,16 +389,16 @@ static void LoadTGA( const char* name, unsigned char** pic, uint32_t* width, uin
 }
 
 
-static void LoadJPG( const char* name, unsigned char** pic, uint32_t* width, uint32_t* height)
+static void LoadJPG( const char *filename, unsigned char **pic, int *width, int *height )
 {
     char* fbuffer;
-    int len = ri.R_ReadFile(name, &fbuffer);
+    int len = ri.R_ReadFile(filename, &fbuffer);
     if (!fbuffer) {
         return;
     }
   
     int components;
-    *pic = stbi_load_from_memory((unsigned char*)fbuffer, len, (int*)width, (int*)height, &components, STBI_rgb_alpha);
+    *pic = stbi_load_from_memory((unsigned char*)fbuffer, len, width, height, &components, STBI_rgb_alpha);
     if (*pic == NULL) {
         ri.FS_FreeFile(fbuffer);
         return;
@@ -442,7 +450,7 @@ typedef struct
 
 
 
-static void LoadBMP( const char *name, unsigned char **pic, uint32_t *width, uint32_t *height )
+static void LoadBMP( const char *name, unsigned char **pic, int *width, int *height )
 {
 	int		columns, rows, numPixels;
 	unsigned char	*pixbuf;
@@ -593,6 +601,13 @@ static void LoadBMP( const char *name, unsigned char **pic, uint32_t *width, uin
 }
 
 
+
+/*
+=====================================
+LoadPCX
+=====================================
+*/
+
 typedef struct {
     char	manufacturer;
     char	version;
@@ -609,7 +624,7 @@ typedef struct {
     char	data;			// unbounded
 } pcx_t;
 
-static void LoadPCX ( const char *filename, unsigned char **pic, unsigned char **palette, uint32_t *width, uint32_t *height)
+static void LoadPCX ( const char *filename, unsigned char **pic, unsigned char **palette, int *width, int *height)
 {
 	char* raw;
 	pcx_t	*pcx;
@@ -699,7 +714,12 @@ static void LoadPCX ( const char *filename, unsigned char **pic, unsigned char *
 }
 
 
-static void LoadPCX32 ( const char *filename, unsigned char **pic, uint32_t *width, uint32_t *height)
+/*
+==============
+LoadPCX32
+==============
+*/
+static void LoadPCX32 ( const char *filename, unsigned char **pic, int *width, int *height)
 {
 	unsigned char	*palette;
 	unsigned char	*pic8;
@@ -727,36 +747,3 @@ static void LoadPCX32 ( const char *filename, unsigned char **pic, uint32_t *wid
 	ri.Free (palette);
 }
 
-
-
-///////////////////////
-
-// SAVE
-
-//////////////////////
-/*
-#define TJE_IMPLEMENTATION
-#include "tiny_jpeg.h"
-
-static void FS_ImgWrite(void* context, void* data, int size)
-{
-    //FILE* fd = (FILE*)context;
-    //fwrite(data, size, 1, fd);
-    ri.FS_WriteFile("lll.jpeg", data, size);
-}
-
-
-int RE_SaveJPG(char * fileName,
-                         const int quality,
-                         const int width,
-                         const int height,
-                         const int num_components,
-                         const unsigned char* src_data)
-{
-    tje_encode_to_file(fileName, width, height, num_components, src_data);
-
-    ri.Printf(PRINT_ALL, "RE_SaveJPG\n");
-    return tje_encode_with_func(FS_ImgWrite, (void*)fileName, quality, width, height, num_components, src_data);
-}
-
-*/

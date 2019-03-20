@@ -20,9 +20,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 ===========================================================================
 */
 #include "tr_local.h"
-#include "tr_globals.h"
-#include "tr_cvar.h"
-#include "../renderercommon/ref_import.h"
+
+
 
 /*
 =================
@@ -32,9 +31,10 @@ Returns true if the grid is completely culled away.
 Also sets the clipped hint bit in tess
 =================
 */
-static qboolean	R_CullTriSurf( srfTriangles_t *cv )
-{
-	int 	boxCull = R_CullLocalBox( cv->bounds );
+static qboolean	R_CullTriSurf( srfTriangles_t *cv ) {
+	int 	boxCull;
+
+	boxCull = R_CullLocalBox( cv->bounds );
 
 	if ( boxCull == CULL_OUT ) {
 		return qtrue;
@@ -113,6 +113,8 @@ This will also allow mirrors on both sides of a model without recursion.
 */
 static qboolean	R_CullSurface( surfaceType_t *surface, shader_t *shader ) {
 	srfSurfaceFace_t *sface;
+	float			d;
+
 	if ( r_nocull->integer ) {
 		return qfalse;
 	}
@@ -139,7 +141,7 @@ static qboolean	R_CullSurface( surfaceType_t *surface, shader_t *shader ) {
 	}
 
 	sface = ( srfSurfaceFace_t * ) surface;
-	float d = DotProduct (tr.or.viewOrigin, sface->plane.normal);
+	d = DotProduct (tr.or.viewOrigin, sface->plane.normal);
 
 	// don't cull exactly on the plane, because there are levels of rounding
 	// through the BSP, ICD, and hardware that may cause pixel gaps if an
@@ -179,7 +181,7 @@ static int R_DlightFace( srfSurfaceFace_t *face, int dlightBits ) {
 		tr.pc.c_dlightSurfacesCulled++;
 	}
 
-	face->dlightBits = dlightBits;
+	face->dlightBits[ tr.smpFrame ] = dlightBits;
 	return dlightBits;
 }
 
@@ -207,14 +209,14 @@ static int R_DlightGrid( srfGridMesh_t *grid, int dlightBits ) {
 		tr.pc.c_dlightSurfacesCulled++;
 	}
 
-	grid->dlightBits = dlightBits;
+	grid->dlightBits[ tr.smpFrame ] = dlightBits;
 	return dlightBits;
 }
 
 
 static int R_DlightTrisurf( srfTriangles_t *surf, int dlightBits ) {
 	// FIXME: more dlight culling to trisurfs...
-	surf->dlightBits = dlightBits;
+	surf->dlightBits[ tr.smpFrame ] = dlightBits;
 	return dlightBits;
 #if 0
 	int			i;
@@ -240,7 +242,7 @@ static int R_DlightTrisurf( srfTriangles_t *surf, int dlightBits ) {
 		tr.pc.c_dlightSurfacesCulled++;
 	}
 
-	grid->dlightBits = dlightBits;
+	grid->dlightBits[ tr.smpFrame ] = dlightBits;
 	return dlightBits;
 #endif
 }
@@ -279,8 +281,7 @@ static int R_DlightSurface( msurface_t *surf, int dlightBits ) {
 R_AddWorldSurface
 ======================
 */
-static void R_AddWorldSurface( msurface_t *surf, int dlightBits )
-{
+static void R_AddWorldSurface( msurface_t *surf, int dlightBits ) {
 	if ( surf->viewCount == tr.viewCount ) {
 		return;		// already in this view
 	}
@@ -352,8 +353,7 @@ void R_AddBrushModelSurfaces ( trRefEntity_t *ent ) {
 R_RecursiveWorldNode
 ================
 */
-static void R_RecursiveWorldNode( mnode_t *node, int planeBits, int dlightBits )
-{
+static void R_RecursiveWorldNode( mnode_t *node, int planeBits, int dlightBits ) {
 
 	do {
 		int			newDlights[2];
@@ -564,8 +564,7 @@ Mark the leaves and nodes that are in the PVS for the current
 cluster
 ===============
 */
-static void R_MarkLeaves (void)
-{
+static void R_MarkLeaves (void) {
 	const byte	*vis;
 	mnode_t	*leaf, *parent;
 	int		i;
@@ -585,8 +584,8 @@ static void R_MarkLeaves (void)
 	// hasn't changed, we don't need to mark everything again
 
 	// if r_showcluster was just turned on, remark everything 
-	if ( tr.viewCluster == cluster && !tr.refdef.AreamaskModified && !r_showcluster->modified )
-    {
+	if ( tr.viewCluster == cluster && !tr.refdef.areamaskModified 
+		&& !r_showcluster->modified ) {
 		return;
 	}
 
@@ -623,7 +622,7 @@ static void R_MarkLeaves (void)
 		}
 
 		// check for door connection
-		if ( (tr.refdef.rd.areamask[leaf->area>>3] & (1<<(leaf->area&7)) ) ) {
+		if ( (tr.refdef.areamask[leaf->area>>3] & (1<<(leaf->area&7)) ) ) {
 			continue;		// not visible
 		}
 
@@ -649,7 +648,7 @@ void R_AddWorldSurfaces (void)
 		return;
 	}
 
-	if ( tr.refdef.rd.rdflags & RDF_NOWORLDMODEL ) {
+	if ( tr.refdef.rdflags & RDF_NOWORLDMODEL ) {
 		return;
 	}
 

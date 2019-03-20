@@ -1,6 +1,13 @@
 #include "tr_local.h"
 #include "tr_displayResolution.h"
-#include "../renderercommon/ref_import.h"
+
+typedef struct vidmode_s
+{
+    const char *description;
+    int         width, height;
+	float		pixelAspect;		// pixel width / height
+} vidmode_t;
+
 
 cvar_t* r_mode;
 
@@ -9,13 +16,6 @@ cvar_t* r_mode;
 static cvar_t* r_customwidth;
 static cvar_t* r_customheight;
 static cvar_t* r_customaspect;
-
-typedef struct vidmode_s
-{
-    const char *description;
-    int         width, height;
-	float		pixelAspect;		// pixel width / height
-} vidmode_t;
 
 
 static const vidmode_t r_vidModes[] =
@@ -31,7 +31,7 @@ static const vidmode_t r_vidModes[] =
 	{ "Mode  8: 1280x1024",		1280,	1024,	1 },
 	{ "Mode  9: 1600x1200",		1600,	1200,	1 },
 	{ "Mode 10: 2048x1536",		2048,	1536,	1 },
-	{ "Mode 11: 856x480",		856,	480,	1 }, // Q3 MODES END HERE AND EXTENDED MODES BEGIN
+	{ "Mode 11: 856x480",		856,	480,	1 },		// Q3 MODES END HERE AND EXTENDED MODES BEGIN
 	{ "Mode 12: 1280x720 (720p)",	1280,	720,	1 },
 	{ "Mode 13: 1280x768",		1280,	768,	1 },
 	{ "Mode 14: 1280x800",		1280,	800,	1 },
@@ -46,11 +46,10 @@ static const vidmode_t r_vidModes[] =
 	{ "Mode 23: 1920x1080 (1080p)",	1920,	1080,	1 },
 	{ "Mode 24: 1920x1200",		1920,	1200,	1 },
 	{ "Mode 25: 1920x1440",		1920,	1440,	1 },
-    { "Mode 26: 2560x1080",		2560,	1080,	1 },
-    { "Mode 27: 2560x1600",		2560,	1600,	1 },
-	{ "Mode 28: 3840x2160 (4K)",	3840,	2160,	1 }
+	{ "Mode 26: 2560x1600",		2560,	1600,	1 },
+	{ "Mode 27: 3840x2160 (4K)",	3840,	2160,	1 }
 };
-static const int s_numVidModes = 29;
+static const int s_numVidModes = 28;
 
 
 void R_DisplayResolutionList_f( void )
@@ -70,7 +69,7 @@ void R_GetModeInfo(unsigned int *width, unsigned int *height, float *windowAspec
 {
 	const vidmode_t	*vm;
 
-    if ( mode < -2 || mode >= s_numVidModes) {
+    if ( mode < -1 || mode >= s_numVidModes) {
          mode = 3;
 	}
 
@@ -98,4 +97,5 @@ void R_InitDisplayResolution( void )
     r_customwidth = ri.Cvar_Get( "r_customwidth", "960", CVAR_ARCHIVE | CVAR_LATCH );
     r_customheight = ri.Cvar_Get( "r_customheight", "540", CVAR_ARCHIVE | CVAR_LATCH );
     r_customaspect = ri.Cvar_Get( "r_customaspect", "1.78", CVAR_ARCHIVE | CVAR_LATCH );
+
 }

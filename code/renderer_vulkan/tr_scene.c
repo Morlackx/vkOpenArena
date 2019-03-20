@@ -20,57 +20,39 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 ===========================================================================
 */
 
-#include "tr_globals.h"
-#include "tr_cvar.h"
-#include "../renderercommon/ref_import.h"
-#include "../renderercommon/matrix_multiplication.h"
-
-// these are sort of arbitrary limits.
-// the limits apply to the sum of all scenes in a frame --
-// the main view, all the 3D icons, etc
-#define	MAX_POLYS		600
-#define	MAX_POLYVERTS	3000
-
-static int		max_polys;
-static int		max_polyverts;
-
-static int	r_firstSceneDrawSurf;
-
-static int	r_numdlights;
-static int	r_firstSceneDlight;
-
-static int	r_numentities;
-static int	r_firstSceneEntity;
-
-static int	r_numpolys;
-static int	r_firstScenePoly;
-
-static int	r_numpolyverts;
-
-static int	r_frameCount;	// incremented every frame
+#include "tr_local.h"
 
 
+extern	int		max_polys;
+extern	int		max_polyverts;
 
-// All of the information needed by the back end must be contained in a backEndData_t.
-// This entire structure is duplicated so the front and back end can run in parallel
-// on an SMP machine
+int			r_firstSceneDrawSurf;
 
-typedef struct
-{
-	drawSurf_t	drawSurfs[MAX_DRAWSURFS];
-	dlight_t	dlights[MAX_DLIGHTS];
-	trRefEntity_t	entities[MAX_REFENTITIES];
-	srfPoly_t	*polys;//[MAX_POLYS];
-	polyVert_t	*polyVerts;//[MAX_POLYVERTS];
-//	renderCommandList_t	commands;
-} backEndData_t;
+int			r_numdlights;
+int			r_firstSceneDlight;
 
+int			r_numentities;
+int			r_firstSceneEntity;
 
-static backEndData_t* backEndData;
+int			r_numpolys;
+int			r_firstScenePoly;
+
+int			r_numpolyverts;
 
 
-void R_InitNextFrame(void)
-{
+/*
+====================
+R_ToggleSmpFrame
+
+====================
+*/
+void R_ToggleSmpFrame( void ) {
+
+	tr.smpFrame = 0;
+
+
+	backEndData[tr.smpFrame]->commands.used = 0;
+
 	r_firstSceneDrawSurf = 0;
 
 	r_numdlights = 0;
@@ -83,31 +65,6 @@ void R_InitNextFrame(void)
 	r_firstScenePoly = 0;
 
 	r_numpolyverts = 0;
-
-    r_frameCount++;
-}
-
-
-void R_InitScene(void)
-{
-	max_polys = r_maxpolys->integer;
-	if (max_polys < MAX_POLYS)
-		max_polys = MAX_POLYS;
-
-	max_polyverts = r_maxpolyverts->integer;
-	if (max_polyverts < MAX_POLYVERTS)
-		max_polyverts = MAX_POLYVERTS;
-
-	unsigned int len = sizeof( backEndData_t ) + sizeof(srfPoly_t) * max_polys + sizeof(polyVert_t) * max_polyverts;
-    
-    char* ptr = ri.Hunk_Alloc( len, h_low);
-    memset(ptr, 0, len);
-
-	backEndData = (backEndData_t *) ptr;
-	backEndData->polys = (srfPoly_t *) (ptr + sizeof( backEndData_t ));
-	backEndData->polyVerts = (polyVert_t *) (ptr + sizeof( backEndData_t ) + sizeof(srfPoly_t) * max_polys);
-
-    R_InitNextFrame();
 }
 
 
@@ -133,8 +90,7 @@ R_AddPolygonSurfaces
 Adds all the scene's polys into this view's drawsurf list
 =====================
 */
-void R_AddPolygonSurfaces( void )
-{
+void R_AddPolygonSurfaces( void ) {
 	int			i;
 	shader_t	*sh;
 	srfPoly_t	*poly;
@@ -182,11 +138,11 @@ void RE_AddPolyToScene( qhandle_t hShader, int numVerts, const polyVert_t *verts
 			return;
 		}
 
-		poly = &backEndData->polys[r_numpolys];
+		poly = &backEndData[tr.smpFrame]->polys[r_numpolys];
 		poly->surfaceType = SF_POLY;
 		poly->hShader = hShader;
 		poly->numVerts = numVerts;
-		poly->verts = &backEndData->polyVerts[r_numpolyverts];
+		poly->verts = &backEndData[tr.smpFrame]->polyVerts[r_numpolyverts];
 		
 		memcpy( poly->verts, &verts[numVerts*j], numVerts * sizeof( *verts ) );
 
@@ -249,8 +205,8 @@ void RE_AddRefEntityToScene( const refEntity_t *ent ) {
 		ri.Error( ERR_DROP, "RE_AddRefEntityToScene: bad reType %i", ent->reType );
 	}
 
-	backEndData->entities[r_numentities].e = *ent;
-	backEndData->entities[r_numentities].lightingCalculated = qfalse;
+	backEndData[tr.smpFrame]->entities[r_numentities].e = *ent;
+	backEndData[tr.smpFrame]->entities[r_numentities].lightingCalculated = qfalse;
 
 	r_numentities++;
 }
@@ -274,7 +230,7 @@ void RE_AddDynamicLightToScene( const vec3_t org, float intensity, float r, floa
 	if ( intensity <= 0 ) {
 		return;
 	}
-	dl = &backEndData->dlights[r_numdlights++];
+	dl = &backEndData[tr.smpFrame]->dlights[r_numdlights++];
 	VectorCopy (org, dl->origin);
 	dl->radius = intensity;
 	dl->color[0] = r;
@@ -303,7 +259,6 @@ void RE_AddAdditiveLightToScene( const vec3_t org, float intensity, float r, flo
 	RE_AddDynamicLightToScene( org, intensity, r, g, b, qtrue );
 }
 
-
 /*
 @@@@@@@@@@@@@@@@@@@@@
 RE_RenderScene
@@ -317,6 +272,9 @@ to handle mirrors,
 */
 void RE_RenderScene( const refdef_t *fd )
 {
+	viewParms_t		parms;
+	int				startTime;
+	qboolean customscrn = !(fd->rdflags & RDF_NOWORLDMODEL);
 	if ( !tr.registered ) {
 		return;
 	}
@@ -325,94 +283,96 @@ void RE_RenderScene( const refdef_t *fd )
 		return;
 	}
 
-	int startTime = ri.Milliseconds();
+	startTime = ri.Milliseconds();
 
-	tr.refdef.AreamaskModified = qfalse;
-	
-    if ( ! (fd->rdflags & RDF_NOWORLDMODEL) )
-    {
-		int	i;
-        // check if the areamask data has changed, which will force 
-        // a reset of the visible leafs even if the view hasn't moved
+	if (!tr.world && customscrn ) {
+		ri.Error (ERR_DROP, "R_RenderScene: NULL worldmodel");
+	}
+
+	memcpy( tr.refdef.text, fd->text, sizeof( tr.refdef.text ) );
+
+	tr.refdef.x = fd->x;
+	tr.refdef.y = fd->y;
+	tr.refdef.width = fd->width;
+	tr.refdef.height = fd->height;
+	tr.refdef.fov_x = fd->fov_x;
+	tr.refdef.fov_y = fd->fov_y;
+
+	VectorCopy( fd->vieworg, tr.refdef.vieworg );
+	VectorCopy( fd->viewaxis[0], tr.refdef.viewaxis[0] );
+	VectorCopy( fd->viewaxis[1], tr.refdef.viewaxis[1] );
+	VectorCopy( fd->viewaxis[2], tr.refdef.viewaxis[2] );
+
+	tr.refdef.time = fd->time;
+	tr.refdef.rdflags = fd->rdflags;
+
+	// copy the areamask data over and note if it has changed, which
+	// will force a reset of the visible leafs even if the view hasn't moved
+	tr.refdef.areamaskModified = qfalse;
+	if ( ! (tr.refdef.rdflags & RDF_NOWORLDMODEL) ) {
+		int		areaDiff;
+		int		i;
+
 		// compare the area bits
-		for (i = 0 ; i < MAX_MAP_AREA_BYTES; i++)
-        {
+		areaDiff = 0;
+		for (i = 0 ; i < MAX_MAP_AREA_BYTES/4 ; i++) {
+			areaDiff |= ((int *)tr.refdef.areamask)[i] ^ ((int *)fd->areamask)[i];
+			((int *)tr.refdef.areamask)[i] = ((int *)fd->areamask)[i];
+		}
 
-			if( tr.refdef.rd.areamask[i] ^ fd->areamask[i] )
-            {
-			    tr.refdef.AreamaskModified = qtrue;
-                //ri.Printf(PRINT_ALL, "%d:%d,%d\n", i, tr.refdef.rd.areamask[i], fd->areamask[i]);
-                break;
-            }
+		if ( areaDiff ) {
+			// a door just opened or something
+			tr.refdef.areamaskModified = qtrue;
 		}
 	}
 
-    tr.refdef.rd = *fd;
-
-    // a single frame may have multiple scenes draw inside it --
-	// a 3D game view, 3D status bar renderings, 3D menus, etc.
-	// They need to be distinguished by the light flare code, because
-	// the visibility state for a given surface may be different in
-	// each scene / view.
 
 	// derived info
 
-	tr.refdef.floatTime = tr.refdef.rd.time * 0.001f;
+	tr.refdef.floatTime = tr.refdef.time * 0.001f;
 
 	tr.refdef.numDrawSurfs = r_firstSceneDrawSurf;
-	tr.refdef.drawSurfs = backEndData->drawSurfs;
+	tr.refdef.drawSurfs = backEndData[tr.smpFrame]->drawSurfs;
 
 	tr.refdef.num_entities = r_numentities - r_firstSceneEntity;
-	tr.refdef.entities = &backEndData->entities[r_firstSceneEntity];
+	tr.refdef.entities = &backEndData[tr.smpFrame]->entities[r_firstSceneEntity];
 
 	tr.refdef.num_dlights = r_numdlights - r_firstSceneDlight;
-	tr.refdef.dlights = &backEndData->dlights[r_firstSceneDlight];
+	tr.refdef.dlights = &backEndData[tr.smpFrame]->dlights[r_firstSceneDlight];
 
 	tr.refdef.numPolys = r_numpolys - r_firstScenePoly;
-	tr.refdef.polys = &backEndData->polys[r_firstScenePoly];
+	tr.refdef.polys = &backEndData[tr.smpFrame]->polys[r_firstScenePoly];
 
 	// turn off dynamic lighting globally by clearing all the
 	// dlights if it needs to be disabled or if vertex lighting is enabled
 	if ( r_dynamiclight->integer == 0 || r_vertexLight->integer == 1 ) {
 		tr.refdef.num_dlights = 0;
 	}
-    
-    // ri.Printf(PRINT_ALL, "(%d, %d, %d, %d)\n", tr.refdef.x, tr.refdef.y, tr.refdef.width, tr.refdef.height);
+
 	// setup view parms for the initial view
 	//
 	// set up viewport
-	// The refdef takes 0-at-the-top y coordinates
-    // 0 +-------> x
-    //   |
-    //   |
-    //   |
-    //   y
-    viewParms_t		parms;
+	// The refdef takes 0-at-the-top y coordinates, so
+	// convert to GL's 0-at-the-bottom space
+	//
 	memset( &parms, 0, sizeof( parms ) );
-
-
-    parms.viewportX = fd->x;
-	parms.viewportY =  fd->y;
-
-    parms.viewportWidth = fd->width;
-	parms.viewportHeight = fd->height;
-
-	parms.fovX = fd->fov_x;
-	parms.fovY = fd->fov_y;
-
-	VectorCopy( fd->vieworg, parms.or.origin );
-	//VectorCopy( fd->viewaxis[0], parms.or.axis[0] );
-	//VectorCopy( fd->viewaxis[1], parms.or.axis[1] );
-	//VectorCopy( fd->viewaxis[2], parms.or.axis[2] );
-	VectorCopy( fd->vieworg, parms.pvsOrigin );
-
-    Mat3x3Copy(parms.or.axis, fd->viewaxis);
+	parms.viewportX = tr.refdef.x;
+	parms.viewportY = glConfig.vidHeight - ( tr.refdef.y + tr.refdef.height );
+	parms.viewportWidth = tr.refdef.width;
+	parms.viewportHeight = tr.refdef.height;
 	parms.isPortal = qfalse;
 
-	if ( (parms.viewportWidth > 0) && (parms.viewportHeight > 0) ) 
-    {
-		R_RenderView( &parms );
-	}
+	parms.fovX = tr.refdef.fov_x;
+	parms.fovY = tr.refdef.fov_y;
+
+	VectorCopy( fd->vieworg, parms.or.origin );
+	VectorCopy( fd->viewaxis[0], parms.or.axis[0] );
+	VectorCopy( fd->viewaxis[1], parms.or.axis[1] );
+	VectorCopy( fd->viewaxis[2], parms.or.axis[2] );
+
+	VectorCopy( fd->vieworg, parms.pvsOrigin );
+
+	R_RenderView( &parms );
 
 	// the next scene rendered in this frame will tack on after this one
 	r_firstSceneDrawSurf = tr.refdef.numDrawSurfs;
@@ -422,20 +382,3 @@ void RE_RenderScene( const refdef_t *fd )
 
 	tr.frontEndMsec += ri.Milliseconds() - startTime;
 }
-
-/*
-typedef struct {
-/	orientationr_t	or;
-	orientationr_t	world;
-//	vec3_t		pvsOrigin;			// may be different than or.origin for portals
-//	qboolean	isPortal;			// true if this view is through a portal
-	qboolean	isMirror;			// the portal is a mirror, invert the face culling
-	cplane_t	portalPlane;		// clip anything behind this if mirroring
-//	int			viewportX, viewportY, viewportWidth, viewportHeight;
-//	float		fovX, fovY;
-	float		projectionMatrix[16] QALIGN(16);
-	cplane_t	frustum[4];
-	vec3_t		visBounds[2];
-	float		zFar;
-} viewParms_t;
-*/

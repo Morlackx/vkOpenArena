@@ -32,6 +32,7 @@ const static int numImageLoaders = 6;
 
 void R_LoadImage(const char *name, unsigned char **pic, int *width, int *height )
 {
+
 	int orgLoader = -1;
 	int i;
 	char localName[ 128 ] = {0};

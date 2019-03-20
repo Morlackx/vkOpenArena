@@ -22,11 +22,6 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 // tr_light.c
 
 #include "tr_local.h"
-#include "tr_globals.h"
-#include "../renderercommon/ref_import.h"
-#include "tr_cvar.h"
-
-
 
 #define	DLIGHT_AT_RADIUS		16
 // at the edge of a dlight's influence, this amount of light will be added
@@ -44,13 +39,11 @@ Used by both the front end (for DlightBmodel) and
 the back end (before doing the lighting calculation)
 ===============
 */
-void R_TransformDlights( int count, dlight_t *dl, const orientationr_t * const or)
-{
+void R_TransformDlights( int count, dlight_t *dl, orientationr_t *or) {
 	int		i;
+	vec3_t	temp;
 
-	for ( i = 0 ; i < count ; i++, dl++ )
-    {
-        vec3_t	temp;
+	for ( i = 0 ; i < count ; i++, dl++ ) {
 		VectorSubtract( dl->origin, or->origin, temp );
 		dl->transformed[0] = DotProduct( temp, or->axis[0] );
 		dl->transformed[1] = DotProduct( temp, or->axis[1] );
@@ -102,11 +95,11 @@ void R_DlightBmodel( bmodel_t *bmodel ) {
 		surf = bmodel->firstSurface + i;
 
 		if ( *surf->data == SF_FACE ) {
-			((srfSurfaceFace_t *)surf->data)->dlightBits = mask;
+			((srfSurfaceFace_t *)surf->data)->dlightBits[ tr.smpFrame ] = mask;
 		} else if ( *surf->data == SF_GRID ) {
-			((srfGridMesh_t *)surf->data)->dlightBits = mask;
+			((srfGridMesh_t *)surf->data)->dlightBits[ tr.smpFrame ] = mask;
 		} else if ( *surf->data == SF_TRIANGLES ) {
-			((srfTriangles_t *)surf->data)->dlightBits = mask;
+			((srfTriangles_t *)surf->data)->dlightBits[ tr.smpFrame ] = mask;
 		}
 	}
 }
@@ -120,7 +113,9 @@ LIGHT SAMPLING
 =============================================================================
 */
 
-
+extern	cvar_t	*r_ambientScale;
+extern	cvar_t	*r_directedScale;
+extern	cvar_t	*r_debugLight;
 
 /*
 =================
@@ -312,7 +307,7 @@ void R_SetupEntityLighting( const trRefdef_t *refdef, trRefEntity_t *ent ) {
 	}
 
 	// if NOWORLDMODEL, only use dynamic lights (menu system, etc)
-	if ( !(refdef->rd.rdflags & RDF_NOWORLDMODEL ) 
+	if ( !(refdef->rdflags & RDF_NOWORLDMODEL ) 
 		&& tr.world->lightGridData ) {
 		R_SetupEntityLightingGrid( ent );
 	} else {

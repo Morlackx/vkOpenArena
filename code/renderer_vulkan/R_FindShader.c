@@ -1,12 +1,7 @@
 #include "tr_local.h"
-#include "tr_globals.h"
 
+#include "fun_log.h"
 #include "vk_image.h"
-#include "tr_cvar.h"
-#include "../renderercommon/ref_import.h"
-
-#include "R_PrintMat.h"
-
 
 #define MAX_SHADERTEXT_HASH		2048
 static char** shaderTextHashTable[MAX_SHADERTEXT_HASH] ={ 0 };
@@ -137,13 +132,10 @@ most world construction surfaces.
 
 ===============
 */
-
-extern void setDefaultShader(void);
-
-
 shader_t* R_FindShader( const char *name, int lightmapIndex, qboolean mipRawImage )
 {
 	char strippedName[MAX_QPATH] = {0};
+
 
 	if ( name[0] == 0 )
     {
@@ -151,9 +143,8 @@ shader_t* R_FindShader( const char *name, int lightmapIndex, qboolean mipRawImag
 		return tr.defaultShader;
 	}
 
-
 	// use (fullbright) vertex lighting if the bsp file doesn't have lightmaps
-	if ( (lightmapIndex >= 0) && (lightmapIndex >= tr.numLightmaps) )
+	if ( lightmapIndex >= 0 && (lightmapIndex >= tr.numLightmaps) )
     {
 		lightmapIndex = LIGHTMAP_BY_VERTEX;
 	}
@@ -171,25 +162,23 @@ shader_t* R_FindShader( const char *name, int lightmapIndex, qboolean mipRawImag
 
 	//
 	// see if the shader is already loaded
-    //
+	
+    shader_t* sh = hashTable[hash];
+	while ( sh )
     {
-        shader_t* sh = hashTable[hash];
-        while ( sh )
+		// NOTE: if there was no shader or image available with the name strippedName
+		// then a default shader is created with lightmapIndex == LIGHTMAP_NONE, so we
+		// have to check all default shaders otherwise for every call to R_FindShader
+		// with that same strippedName a new default shader is created.
+		if ( ( 0 == Q_stricmp(sh->name, strippedName) ) &&  (sh->lightmapIndex == lightmapIndex || sh->defaultShader) )
         {
-            // NOTE: if there was no shader or image available with the name strippedName
-            // then a default shader is created with lightmapIndex == LIGHTMAP_NONE, so we
-            // have to check all default shaders otherwise for every call to R_findShader
-            // with that same strippedName a new default shader is created.
-            if ( ( 0 == Q_stricmp(sh->name, strippedName) ) &&  (sh->lightmapIndex == lightmapIndex || sh->defaultShader) )
-            {
-                // match found
-                return sh;
-            }
+			// match found
+			return sh;
+		}
 
-            sh = sh->next;
-        }    
-    }
-  
+        sh = sh->next;
+	}
+
     R_SetTheShader( strippedName, lightmapIndex );
 
 	//
@@ -209,18 +198,18 @@ shader_t* R_FindShader( const char *name, int lightmapIndex, qboolean mipRawImag
             {
                 // had errors, so use default shader
                 R_SetDefaultShader( );
-                ri.Printf( PRINT_WARNING, "ParseShader: %s had errors\n", strippedName );
-            }
 
-            return FinishShader();
+                ri.Printf( PRINT_WARNING, "ParseShader: %s had errors\n", strippedName );
+
+            }
+            sh = FinishShader();
+            return sh;
         }
     }
 
 
 	// if not defined in the in-memory shader descriptions,
 	// look for a single supported image file
-
-    /*
     char fileName[128] = {0};
     {
         qboolean ptExist = qfalse;
@@ -250,26 +239,17 @@ shader_t* R_FindShader( const char *name, int lightmapIndex, qboolean mipRawImag
             fileName[i] = '\0';
         }
     }
-    */
+
+    image_t* image = R_FindImageFile( fileName, mipRawImage, mipRawImage, mipRawImage ? GL_REPEAT : GL_CLAMP );
 
 
-    image_t* image = R_FindImageFile( name, mipRawImage, mipRawImage, mipRawImage ? GL_REPEAT : GL_CLAMP );
-    
-    if(image != NULL)
-    {
-        // create the default shading commands
-        R_CreateDefaultShadingCmds(name, image);
-    }
-    else
-	{
-	    setDefaultShader();
-	}
-
+	//
+	// create the default shading commands
+	//
+    R_CreateDefaultShadingCmds(fileName, image);
 
     return FinishShader();
 }
-
-
 
 
 
@@ -291,7 +271,8 @@ qhandle_t RE_RegisterShader( const char *name )
 		return 0;
 	}
 
-    shader_t* sh = R_FindShader( name, LIGHTMAP_2D, qtrue );
+
+	shader_t* sh = R_FindShader( name, LIGHTMAP_2D, qtrue );
 
 	// we want to return 0 if the shader failed to
 	// load for some reason, but R_FindShader should
@@ -319,7 +300,7 @@ qhandle_t RE_RegisterShaderNoMip( const char *name )
 		ri.Printf(PRINT_ALL, "Shader name exceeds MAX_QPATH\n" );
 		return 0;
 	}
- 
+
 	shader_t* sh = R_FindShader( name, LIGHTMAP_2D, qfalse );
 
 	// we want to return 0 if the shader failed to
@@ -339,7 +320,7 @@ qhandle_t RE_RegisterShaderFromImage(const char *name, int lightmapIndex, image_
 {
 
 	int hash = generateHashValue(name, FILE_HASH_SIZE);
-
+	
 	//
 	// see if the shader is already loaded
 	//
@@ -605,7 +586,7 @@ void R_RemapShader(const char *shaderName, const char *newShaderName, const char
         {
             // NOTE: if there was no shader or image available with the name strippedName
             // then a default shader is created with lightmapIndex == LIGHTMAP_NONE, so we
-            // have to check all default shaders otherwise for every call to R_findShader
+            // have to check all default shaders otherwise for every call to R_FindShader
             // with that same strippedName a new default shader is created.
             if (Q_stricmp(pSh->name, strippedName2) == 0)
             {
@@ -620,7 +601,6 @@ void R_RemapShader(const char *shaderName, const char *newShaderName, const char
         {
             qhandle_t h;
             //h = RE_RegisterShaderLightMap(newShaderName, 0);
-
             pSh = R_FindShader( newShaderName, 0, qtrue );
 
             if ( pSh->defaultShader )

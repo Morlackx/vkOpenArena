@@ -19,13 +19,11 @@ along with Foobar; if not, write to the Free Software
 Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 ===========================================================================
 */
-#include "tr_globals.h"
+#include "tr_local.h"
+#include "mvp_matrix.h"
 #include "vk_shade_geometry.h"
-#include "vk_instance.h"
-#include "vk_pipelines.h"
-#include "vk_image.h"
-#include "tr_cvar.h"
-#include "tr_backend.h"
+#include "Vk_Instance.h"
+
 /*
 
   for a projection shadow:
@@ -107,7 +105,7 @@ static void R_ExtrudeShadowEdges( void ) {
 
 
 // VULKAN
-static void vk_renderShadowEdges(VkPipeline vk_pipeline)
+static void R_Vk_Dx_RenderShadowEdges(VkPipeline vk_pipeline)
 {
 
 	int i = 0;
@@ -138,10 +136,8 @@ static void vk_renderShadowEdges(VkPipeline vk_pipeline)
 			tess.svars.colors[k][3] = 255;
 		}
 
-        uploadShadingData();
-        updateMVP(backEnd.viewParms.isPortal, backEnd.projection2D, getptr_modelview_matrix());
-
-        vk_shade_geometry(vk_pipeline, VK_FALSE, DEPTH_RANGE_NORMAL, VK_TRUE);
+        vk_bind_geometry();
+        vk_shade_geometry(vk_pipeline, qfalse, normal, qtrue);
 
 
 		i += count;
@@ -170,6 +166,9 @@ void RB_ShadowTessEnd( void ) {
 		return;
 	}
 
+	if ( glConfig.stencilBits < 4 ) {
+		return;
+	}
 
 	VectorCopy( backEnd.currentEntity->lightDir, lightDir );
 
@@ -216,15 +215,15 @@ void RB_ShadowTessEnd( void ) {
 
 	// draw the silhouette edges
 
-	updateCurDescriptor( tr.whiteImage->descriptor_set, 0);
+	GL_Bind( tr.whiteImage );
 
 	R_ExtrudeShadowEdges();
 
 	// mirrors have the culling order reversed
-
+    int isMir = backEnd.viewParms.isMirror;
 	// VULKAN
-	vk_renderShadowEdges(g_stdPipelines.shadow_volume_pipelines[0][backEnd.viewParms.isMirror]);
-	vk_renderShadowEdges(g_stdPipelines.shadow_volume_pipelines[1][backEnd.viewParms.isMirror]);
+	R_Vk_Dx_RenderShadowEdges(vk.shadow_volume_pipelines[0][isMir]);
+	R_Vk_Dx_RenderShadowEdges(vk.shadow_volume_pipelines[1][isMir]);
 
 }
 
@@ -248,7 +247,8 @@ void RB_ShadowFinish( void )
 		return;
 	}
 
-	updateCurDescriptor( tr.whiteImage->descriptor_set, 0);
+
+	GL_Bind( tr.whiteImage );
 
 	// VULKAN
 
@@ -273,21 +273,23 @@ void RB_ShadowFinish( void )
     }
     tess.numVertexes = 4;
 
-	//PushModelView();
 
-    // Com_Memcpy(tmp, vk_world.modelview_transform, 64);
-
-    float tmp[16] = { 1, 0 , 0, 0,
-        0, 1, 0, 0,
-        0, 0, 1, 0,
-        0, 0, 0, 1};
+    // set backEnd.or.modelMatrix to identity matrix
+    float bak[16];
      
-    uploadShadingData();
-    updateMVP(backEnd.viewParms.isPortal, backEnd.projection2D, tmp);
-    vk_shade_geometry(g_stdPipelines.shadow_finish_pipeline, VK_FALSE, DEPTH_RANGE_NORMAL, VK_TRUE);
+   
+    get_modelview_matrix(bak);
+
+    reset_modelview_matrix();
+
+    vk_bind_geometry();
+    vk_shade_geometry(vk.shadow_finish_pipeline, qfalse, normal, qtrue);
+
+    set_modelview_matrix(bak);
 
     tess.numIndexes = 0;
     tess.numVertexes = 0;
+
 }
 
 
